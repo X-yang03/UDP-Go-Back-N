@@ -32,8 +32,6 @@ const std::string clientIP = "127.0.0.1";
 
 #define intro "Type 'send' to send files, 'recv' to recieve files\n"
 
-#define N 32  // window size
-
 #define serverPort 8888
 #define clientPort 8000
 #define routerPort 8088
@@ -45,7 +43,7 @@ const std::string clientIP = "127.0.0.1";
 
 #define MSS 8178 //首部有14字节的各种信息,因此传输数据最大4082字节
 
-#define wait_time 400  //超时等待800ms
+#define wait_time 500  //超时等待00ms
 #define MSL 2000
 
 struct FileHead {

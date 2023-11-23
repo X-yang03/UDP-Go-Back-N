@@ -78,10 +78,18 @@ int _Server::server_init() {
 		printf("bind Error: %s (errno: %d)\n", strerror(errno), errno);
 		return 1;
 	}
-	/*printf("Set the Window Size : ");
+	printf("Set the Window Size(4-32) : ");
 	std::cin >> wndSize;
-	printf("\n WndSize : %d\n", wndSize);*/
-	wndSize = 8;
+
+	if (wndSize < 4)
+		wndSize = 4;
+	else if (wndSize > 32)
+		wndSize = 32;
+	printf("\n WndSize : %d\n", wndSize);
+
+	int nRecvBuf = wndSize * MSS;//设置接收缓冲区大小  否则会出现丢包
+
+	setsockopt(Server, SOL_SOCKET, SO_RCVBUF, (const char*)&nRecvBuf, sizeof(int));
 
 	std::string str("Waiting for Connection....");
 	logger(str);

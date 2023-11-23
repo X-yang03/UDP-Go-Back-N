@@ -6,28 +6,28 @@
 
 static std::fstream Client_log; //日志输出，保存为client_log.txt
 
-std::deque<msg> Cache;
+std::deque<msg> Cache;		//数据缓冲区
 std::deque<msg> CurrWnd;    //当前窗口
 static int wndSize = 0;
 SOCKET Client;
-static struct fakeHead sendHead, recvHead;
+static struct fakeHead sendHead, recvHead;  //伪首部
 static sockaddr_in server_addr;
 static sockaddr_in client_addr;
 static SYSTEMTIME sysTime = { 0 };
 static int addrlen;
-static u_short baseSeq = 0;   //消息序列号
-static u_short nextSeq = 0;
+static u_short baseSeq = 0;   //窗口的起始seq,当前未被确认的最小seq
+static u_short nextSeq = 0;		//窗口的末尾seq,指当前未被发送的最小seq
 double total_time = 0;
 double total_size = 0;
 bool ifDone = 0;
 
 static std::string currentPath = "./test/";
 
-std::shared_mutex cache_mutex;
+std::shared_mutex cache_mutex;    //通过mutex类,防止线程之间冲突
 std::shared_mutex wnd_mutex;
 std::shared_mutex log_mutex;
 
-int CachePush(msg message) {
+int CachePush(msg message) {    //将对Cache队列的操作封装为线程安全的
 	std::unique_lock lock(cache_mutex);
 	Cache.push_back(message);
 	return 0;
@@ -53,7 +53,8 @@ int wndPop() {
 	return 0;
 }
 
-static void logger(std::string str) {
+//写入日志
+static void logger(std::string str) {  
 	printf("%s\n", str.c_str());
 	GetSystemTime(&sysTime);
 	std::string s = std::to_string(sysTime.wMinute) + " : " + std::to_string(sysTime.wSecond)+" : "+ std::to_string(sysTime.wMilliseconds) + "\n" + str+"\n";
@@ -122,16 +123,21 @@ int _Client::start_client() {
 	s = "[Log] Connecting to server..........";
 	logger(s);
 	
+	//设置阻塞超时(超时重传)
 	int timeout = wait_time;
-	setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
+	setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));  
 
 	cnt_setup();  //建立握手
 
-	auto begin = std::chrono::steady_clock::now();
-	packupFiles();
+	//修改缓冲区大小(其实发送端缓冲区不重要, 接收端缓冲区大小才是关键)
+	int buffer_size = wndSize * MSS;
+	setsockopt(Client, SOL_SOCKET, SO_SNDBUF, (const char*)&buffer_size, sizeof(buffer_size));
 
-	sendFiles();
-	recvAcks();
+	auto begin = std::chrono::steady_clock::now();
+	packupFiles(); //包装数据线程,将二进制数据打包放入缓冲区
+
+	sendFiles();  //当窗口有空位时,滑动窗口,将数据从缓冲区移入窗口并发送
+	recvAcks();		//接收线程
 	while (!ifDone) {
 
 	}
@@ -147,7 +153,8 @@ int _Client::start_client() {
 
 }
 
-int _Client::resendWnd() {
+// 重新发送窗口内的数据包
+int _Client::resendWnd() {  
 	std::unique_lock lock(wnd_mutex);
 	for (int i = 0; i < CurrWnd.size(); i++) {
 		msg message = CurrWnd[i];
@@ -159,6 +166,7 @@ int _Client::resendWnd() {
 
 }
 
+//接收线程, 包括超时重传
 void _Client::recvAcks() {
 	std::thread recvacks([&]() {
 		while (true) {
@@ -166,17 +174,12 @@ void _Client::recvAcks() {
 			int recvLen = recvfrom(Client, (char*)&recvBuff, sizeof(msg), 0, (struct sockaddr*)&server_addr, &addrlen);
 			// if receive buffer is valid
 			if (recvLen > 0) {
-				if (recvBuff.checkValid(&recvHead) && recvBuff.ack>baseSeq) { //检验校验和
+				if (recvBuff.checkValid(&recvHead) && recvBuff.ack>baseSeq) { //校验和正确且ack和seq能对应,此外的情况不做处理,进行忽略
 					recvLog(recvBuff);
 					if (recvBuff.if_FIN() && recvBuff.if_ACK()) {
 						//挥手信息
 						std::string s("[FIN] Destroy the connection!");
 						logger(s);
-					}
-					else {
-						/*std::string s = "[Log] Package " + std::to_string(recvBuff.ack-1) + " sent successfully!";
-						logger(s);*/
-						// 应答确认
 					}
 					
 					for (int i = baseSeq; i < recvBuff.ack; i++) {    
@@ -187,17 +190,13 @@ void _Client::recvAcks() {
 						ifDone = 1;
 						return;
 					}
-					
+					//更新baseSeq
 					baseSeq = recvBuff.ack > baseSeq ? recvBuff.ack : baseSeq;
-					
-				}
-				else {
 					
 				}
 			}
 			else {
 				//超时，将窗口内的分组进行重传
-				
 				resendWnd();
 			}
 		}
@@ -205,20 +204,22 @@ void _Client::recvAcks() {
 	recvacks.detach();
 }
 
-void _Client::sendFiles() {
+//发送线程
+void _Client::sendFiles() {   
 	std::thread sendfiles([&]() {
+		msg message;
 		while (true) {
-			if(CurrWnd.size() < wndSize) {
+			if(CurrWnd.size() < wndSize) {  //当出现空位(窗口滑动)
 				while (Cache.empty()) {
 
 				}
-				msg message = CachePop();
+				message = CachePop();    //取出缓冲区的数据
 				message.set_seq(nextSeq);
 				message.set_check(&sendHead);
-				wndPush(message);
+				wndPush(message);		//加入窗口,并发送
 				sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
 				sendLog(message);
-				nextSeq++;
+				nextSeq++;    //更新nextSeq
 				if (message.if_FIN()) {
 					return;
 				}
@@ -228,11 +229,11 @@ void _Client::sendFiles() {
 	sendfiles.detach();
 }
 
-void _Client::packupFiles() {
+void _Client::packupFiles() {    //打包线程
 	std::thread packupfiles([&]() {
 		int seq = 0;
 		for (const auto& entry : std::filesystem::directory_iterator(currentPath)) {  //获取所有文件entry
-			packupFile(entry);
+			packupFile(entry);  
 		}
 		msg wave;
 		wave.set_srcPort(clientPort);
@@ -241,7 +242,7 @@ void _Client::packupFiles() {
 		wave.set_seq(baseSeq);
 		wave.set_FIN();  //设置Fin位
 		wave.set_check(&sendHead);
-		CachePush(wave);
+		CachePush(wave);     //最后还要打包一条FIN消息
 
 		Client_log << "[Log] Packed all files!" << std::endl;
 		return;
@@ -257,68 +258,71 @@ int _Client::packupFile(std::filesystem::directory_entry entry) {
 	total_size += filelen;
 	struct FileHead descriptor {
 		filename,
-			filelen
+		filelen
 	};
 
-	msg fileDescriptor;
+	msg *fileDescriptor = new msg;   //文件头,描述长度和名称
 
-	fileDescriptor.set_srcPort(clientPort);
-	fileDescriptor.set_desPort(serverPort);
-	fileDescriptor.set_len(sizeof(struct FileHead));
-	fileDescriptor.set_ACK();
-	fileDescriptor.set_FDS(); //FileDescriptor,表示这是一条描述性消息
-	fileDescriptor.set_seq(baseSeq);
-	fileDescriptor.set_data((char*)&descriptor);
-	fileDescriptor.set_check(&sendHead);
+	fileDescriptor->set_srcPort(clientPort);
+	fileDescriptor->set_desPort(serverPort);
+	fileDescriptor->set_len(sizeof(struct FileHead));
+	fileDescriptor->set_ACK();
+	fileDescriptor->set_FDS(); //FileDescriptor,表示这是一条描述性消息
+	fileDescriptor->set_seq(baseSeq);
+	fileDescriptor->set_data((char*)&descriptor);
+	fileDescriptor->set_check(&sendHead);
 
-	CachePush(fileDescriptor);
+	CachePush(*fileDescriptor);   //加入缓冲区
+	delete fileDescriptor;
 
 	std::string path = currentPath + filename;
 
 	std::ifstream input(path, std::ios::binary);
 
 	int segments = ceil((float)filelen / MSS);  //分为多个节发送
-
+	msg *file_msg;
 	for (int i = 0; i < segments; i++) {
 		char buffer[MSS];
 		int send_len = (i == segments - 1) ? filelen % MSS : MSS;
 		input.read(buffer, send_len);
-		msg file_msg;
-
-		file_msg.set_srcPort(clientPort);
-		file_msg.set_desPort(serverPort);
-		file_msg.set_len(send_len);
-		file_msg.set_ACK();
-		file_msg.set_seq(baseSeq);
-		file_msg.set_data(buffer);
-		file_msg.set_check(&sendHead);
-		CachePush(file_msg);
+		
+		file_msg = new msg;
+		file_msg->set_srcPort(clientPort);
+		file_msg->set_desPort(serverPort);
+		file_msg->set_len(send_len);
+		file_msg->set_ACK();
+		file_msg->set_seq(baseSeq);
+		file_msg->set_data(buffer);
+		file_msg->set_check(&sendHead);
+		CachePush(*file_msg);    //加入缓冲区
+		delete file_msg;
 		}
 
 	return 0;
 }
 
 int _Client::cnt_setup() {
-	msg first_shake;
-	first_shake.set_srcPort(clientPort);
-	first_shake.set_desPort(serverPort);
-	first_shake.set_len(0);
-	first_shake.set_seq(baseSeq);
-	first_shake.set_SYN();   //第一次握手,仅发出一条SYN消息
-	first_shake.set_check(&sendHead);
+	msg *first_shake = new msg;
+	first_shake->set_srcPort(clientPort);
+	first_shake->set_desPort(serverPort);
+	first_shake->set_len(0);
+	first_shake->set_seq(baseSeq);
+	first_shake->set_SYN();   //第一次握手,仅发出一条SYN消息
+	first_shake->set_check(&sendHead);
 
 	char info[50];
-	sprintf(info, "[SYN] Seq=%d  len=%d", first_shake.seq, first_shake.len);
+	sprintf(info, "[SYN] Seq=%d  len=%d", first_shake->seq, first_shake->len);
 	std::string s = info;
 	logger(s);
 
 	baseSeq += 1;  //更新Seq
 	nextSeq += 1;
-	sendto(Client, (char*)&first_shake, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
+	sendto(Client, (char*)first_shake, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
 
+	msg* recv_msg = new msg;
 	while (true) {
-		msg recv_msg;
-		int result = recvfrom(Client, (char*)&recv_msg, sizeof(msg), 0, (struct sockaddr*)&server_addr, &addrlen);
+		
+		int result = recvfrom(Client, (char*)recv_msg, sizeof(msg), 0, (struct sockaddr*)&server_addr, &addrlen);
 		if (result < 0) {         //超时
 			std::string str("[Error] Time out , try to resend!");
 			logger(str);
@@ -326,18 +330,24 @@ int _Client::cnt_setup() {
 			sendto(Client, (char*)&first_shake, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
 		}
 		else { //成功接收到回复
-			recvLog(recv_msg);
-			if (recv_msg.checkValid(&recvHead) && recv_msg.ack == baseSeq) {  //校验和正确,且Seq与ack对应
+			recvLog(*recv_msg);
+			if (recv_msg->checkValid(&recvHead) && recv_msg->ack == baseSeq) {  //校验和正确,且Seq与ack对应
 
-				if (recv_msg.if_SYN()) {
-					int size = recv_msg.message[0];
+				if (recv_msg->if_SYN()) {   //握手消息
+					int size = recv_msg->message[0];   //获取窗口大小
 					wndSize = size;
+					sprintf(info,"Set wndSize: %d", size);
+					s = info;
+					logger(s);
+
 				}
+				delete recv_msg;
+				delete first_shake;
 				break;
 
 			}
 			else {
-				sendto(Client, (char*)&first_shake, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
+				sendto(Client, (char*)first_shake, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);  //超时重传
 			}
 		}
 
