@@ -22,8 +22,7 @@ double total_size = 0;
 
 bool ifDone = 0;			//用于主线程与其他线程的同步
 bool lossSet = 0;			//是否设置丢包率
-int lossrate = 0;			//丢包率， 每lossrate个包发生一次丢包
-int nowloss = 1;			
+int lossrate = 0;			//丢包率， 每lossrate个包发生一次丢包		
 int delay = 0;
 
 static std::string currentPath = "./test/";
@@ -58,10 +57,6 @@ int wndPop() {
 	return 0;
 }
 
-bool ifLoss() {
-
-	return (nowloss++) % (lossrate+1) == 0;
-}
 
 //写入日志
 static void logger(std::string str) {  
