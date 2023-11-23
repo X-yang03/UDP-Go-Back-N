@@ -20,10 +20,10 @@ static u_short nextSeq = 0;		//窗口的末尾seq,指当前未被发送的最小seq
 double total_time = 0;
 double total_size = 0;
 
-bool ifDone = 0;
-bool lossSet = 0;
-int lossrate = 0;
-int nowloss = 1;
+bool ifDone = 0;			//用于主线程与其他线程的同步
+bool lossSet = 0;			//是否设置丢包率
+int lossrate = 0;			//丢包率， 每lossrate个包发生一次丢包
+int nowloss = 1;			
 int delay = 0;
 
 static std::string currentPath = "./test/";
@@ -254,12 +254,12 @@ void _Client::sendFiles() {
 				message.set_check(&sendHead);
 				wndPush(message);		//加入窗口,并发送
 
-				if (!ifLoss() || !lossSet) {
-					Sleep(delay);
+				if (nextSeq %(lossrate+1)|| !lossSet) {  //没有发生丢包，或没有设置丢包率
+					Sleep(delay);	//延迟用Sleep实现
 					sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
 					sendLog(message);
 				}
-				else {
+				else {	//发生丢包
 					std::string s = "[Miss] Miss package with seq " + std::to_string(message.seq);
 					logger(s);
 				}
