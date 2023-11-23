@@ -19,7 +19,12 @@ static u_short baseSeq = 0;   //窗口的起始seq,当前未被确认的最小seq
 static u_short nextSeq = 0;		//窗口的末尾seq,指当前未被发送的最小seq
 double total_time = 0;
 double total_size = 0;
+
 bool ifDone = 0;
+bool lossSet = 0;
+int lossrate = 0;
+int nowloss = 1;
+int delay = 0;
 
 static std::string currentPath = "./test/";
 
@@ -51,6 +56,11 @@ int wndPop() {
 	std::unique_lock lock(wnd_mutex);
 	CurrWnd.pop_front();
 	return 0;
+}
+
+bool ifLoss() {
+
+	return (nowloss++) % (lossrate+1) == 0;
 }
 
 //写入日志
@@ -104,7 +114,7 @@ int _Client::start_client() {
 	inet_pton(AF_INET, clientIP.c_str(), &client_addr.sin_addr.S_un.S_addr);
 
 	server_addr.sin_family = AF_INET;       //IPV4
-	server_addr.sin_port = htons(routerPort);
+	server_addr.sin_port = htons(serverPort);
 	inet_pton(AF_INET, serverIP.c_str(), &server_addr.sin_addr.S_un.S_addr);
 
 	sendHead.srcIP = client_addr.sin_addr.S_un.S_addr;
@@ -127,11 +137,37 @@ int _Client::start_client() {
 	int timeout = wait_time;
 	setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));  
 
+	printf("set the loss rate(1-99): ");
+	std::cin >> lossrate;
+	if (lossrate <= 0 || lossrate > 100) {
+		lossSet = false;
+		std::string str("\nLoss rate out of range! No Loss Rate!\n");
+		logger(str);
+	}
+	else
+	{
+		lossSet = true;
+		lossrate = 100 / lossrate;
+		std::string str = "\nMiss occurs every " + std::to_string(lossrate) + " packages\n";
+		logger(str);
+	}
+
+
+	printf("set the delay(ms): ");
+	std::cin >> delay;
+	if (delay < 0) delay = 0;
+	s = "\nEach package has a delay of " + std::to_string(delay) + " ms\n";
+	logger(s);
+
 	cnt_setup();  //建立握手
 
 	//修改缓冲区大小(其实发送端缓冲区不重要, 接收端缓冲区大小才是关键)
 	int buffer_size = wndSize * MSS;
 	setsockopt(Client, SOL_SOCKET, SO_SNDBUF, (const char*)&buffer_size, sizeof(buffer_size));
+
+	int nRecvBuf = wndSize * MSS;//设置接收缓冲区大小  否则会出现丢包
+
+	setsockopt(Client, SOL_SOCKET, SO_RCVBUF, (const char*)&nRecvBuf, sizeof(int));
 
 	auto begin = std::chrono::steady_clock::now();
 	packupFiles(); //包装数据线程,将二进制数据打包放入缓冲区
@@ -175,21 +211,21 @@ void _Client::recvAcks() {
 			// if receive buffer is valid
 			if (recvLen > 0) {
 				if (recvBuff.checkValid(&recvHead) && recvBuff.ack>baseSeq) { //校验和正确且ack和seq能对应,此外的情况不做处理,进行忽略
-					recvLog(recvBuff);
-					if (recvBuff.if_FIN() && recvBuff.if_ACK()) {
-						//挥手信息
-						std::string s("[FIN] Destroy the connection!");
-						logger(s);
-					}
 					
 					for (int i = baseSeq; i < recvBuff.ack; i++) {    
 						//将已确认的分组弹出窗口(窗口向后滑动)
 						wndPop();
 					}
-					if (recvBuff.if_FIN()) {
+					recvLog(recvBuff);
+					if (recvBuff.if_FIN() && recvBuff.if_ACK()) {
+						//挥手信息
+						std::string s("[FIN] Destroy the connection!");
+						logger(s);
 						ifDone = 1;
 						return;
 					}
+					
+					
 					//更新baseSeq
 					baseSeq = recvBuff.ack > baseSeq ? recvBuff.ack : baseSeq;
 					
@@ -217,8 +253,16 @@ void _Client::sendFiles() {
 				message.set_seq(nextSeq);
 				message.set_check(&sendHead);
 				wndPush(message);		//加入窗口,并发送
-				sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
-				sendLog(message);
+
+				if (!ifLoss() || !lossSet) {
+					Sleep(delay);
+					sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
+					sendLog(message);
+				}
+				else {
+					std::string s = "[Miss] Miss package with seq " + std::to_string(message.seq);
+					logger(s);
+				}
 				nextSeq++;    //更新nextSeq
 				if (message.if_FIN()) {
 					return;

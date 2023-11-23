@@ -59,7 +59,7 @@ int _Server::server_init() {
 	
 	//初始化addr与伪首部
 	client_addr.sin_family = AF_INET;       //IPV4
-	client_addr.sin_port = htons(routerPort);     //PORT:8888,htons将主机小端字节转换为网络的大端字节
+	client_addr.sin_port = htons(clientPort);     //PORT:8888,htons将主机小端字节转换为网络的大端字节
 	inet_pton(AF_INET, clientIP.c_str(), &client_addr.sin_addr.S_un.S_addr);
 
 	server_addr.sin_family = AF_INET;       //IPV4
@@ -85,7 +85,7 @@ int _Server::server_init() {
 		wndSize = 4;
 	else if (wndSize > 32)
 		wndSize = 32;
-	printf("\n WndSize : %d\n", wndSize);
+	printf("\nWndSize : %d\n", wndSize);
 
 	int nRecvBuf = wndSize * MSS;//设置接收缓冲区大小  否则会出现丢包
 
