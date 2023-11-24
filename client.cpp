@@ -68,15 +68,15 @@ static void logger(std::string str) {
 }
 
 static void sendLog(msg m) {
-	char info1[100];
-	sprintf(info1, "[Log] Send Package %d, checkSum = %d,len = %d, baseSeq = %d, nextSeq = %d, wndSize = %d", m.seq, m.check,m.len, baseSeq, nextSeq, CurrWnd.size());
+	char info1[150];
+	sprintf(info1, "[Log] Send Package %d, checkSum = %d,\t len = %d, baseSeq = %d, nextSeq = %d, wndSize = %d\n", m.seq, m.check,m.len, baseSeq, nextSeq, CurrWnd.size());
 	std::string str = info1;
 	logger(str);
 }
 
 static void recvLog(msg m) {
 	char info[100];
-	sprintf(info, "[Log] Recieve Ack %d, checkSum = %d , wndSize = %d", m.ack, m.check,CurrWnd.size());
+	sprintf(info, "[Log] Recieve Ack %d,\t checkSum = %d ,\t wndSize = %d\n", m.ack, m.check,CurrWnd.size());
 	std::string str = info;
 	logger(str);
 }
@@ -190,7 +190,7 @@ int _Client::resendWnd() {
 	for (int i = 0; i < CurrWnd.size(); i++) {
 		msg message = CurrWnd[i];
 		sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
-		std::string s = "[Rsd] Resend Package " + std::to_string(message.seq);
+		std::string s = "[Rsd] Resend Package " + std::to_string(message.seq)+"\n";
 		logger(s);
 	}
 	return 0;
@@ -228,7 +228,9 @@ void _Client::recvAcks() {
 			}
 			else {
 				//超时，将窗口内的分组进行重传
+				SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY| FOREGROUND_RED);
 				resendWnd();
+				SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY| FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 			}
 		}
 	});
@@ -255,7 +257,7 @@ void _Client::sendFiles() {
 					sendLog(message);
 				}
 				else {	//发生丢包
-					std::string s = "[Miss] Miss package with seq " + std::to_string(message.seq);
+					std::string s = "[Miss] Miss package with seq " + std::to_string(message.seq) +"\n";
 					logger(s);
 				}
 				nextSeq++;    //更新nextSeq
