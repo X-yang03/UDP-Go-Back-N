@@ -41,7 +41,7 @@ const std::string clientIP = "127.0.0.1";
 #define Ack 0b0100
 #define Fds 0b1000    // File Discriptor 描述文件大小与名称
 
-#define MSS 8178 //首部有14字节的各种信息,因此传输数据最大4082字节
+#define MSS 4082 //首部有14字节的各种信息,因此传输数据最大4082字节
 
 #define wait_time 500  //超时等待00ms
 #define MSL 2000
@@ -55,7 +55,7 @@ struct fakeHead {   //伪首部
 	u_long srcIP;
 	u_long desIP;
 	u_short protocol = 17; //协议号,UDP为17
-	u_short length = 8192; //sizeof(Message)
+	u_short length = 4096; //sizeof(Message)
 };
 
 struct Message {

@@ -169,7 +169,7 @@ int _Client::start_client() {
 
 	sendFiles();  //当窗口有空位时,滑动窗口,将数据从缓冲区移入窗口并发送
 	recvAcks();		//接收线程
-	while (!ifDone) {
+	while (!ifDone) {   //控制线程一同退出
 
 	}
 	auto after = std::chrono::steady_clock::now();
@@ -219,8 +219,6 @@ void _Client::recvAcks() {
 						ifDone = 1;
 						return;
 					}
-					
-					
 					//更新baseSeq
 					baseSeq = recvBuff.ack > baseSeq ? recvBuff.ack : baseSeq;
 					
@@ -251,7 +249,7 @@ void _Client::sendFiles() {
 				message.set_check(&sendHead);
 				wndPush(message);		//加入窗口,并发送
 
-				if (nextSeq %(lossrate+1)|| !lossSet) {  //没有发生丢包，或没有设置丢包率
+				if (!lossSet||nextSeq %(lossrate+1)) {  //没有发生丢包，或没有设置丢包率
 					Sleep(delay);	//延迟用Sleep实现
 					sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
 					sendLog(message);
@@ -272,7 +270,6 @@ void _Client::sendFiles() {
 
 void _Client::packupFiles() {    //打包线程
 	std::thread packupfiles([&]() {
-		int seq = 0;
 		for (const auto& entry : std::filesystem::directory_iterator(currentPath)) {  //获取所有文件entry
 			packupFile(entry);  
 		}

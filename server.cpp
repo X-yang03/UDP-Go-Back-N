@@ -14,7 +14,7 @@ static u_short NowAck = 0;
 
 std::string savePath = "./save/";
 
-static void logger(std::string str) {
+static void logger(std::string str) {   //写入日志
 	printf("%s\n", str.c_str());
 	GetSystemTime(&sysTime);
 	std::string s = std::to_string(sysTime.wMinute) + " : " + std::to_string(sysTime.wSecond) + " : " + std::to_string(sysTime.wMilliseconds) + "\n" + str + "\n";
@@ -30,7 +30,7 @@ static void recvLog(msg m) {
 
 static void sendLog(msg m) {
 	char info[100];
-	sprintf(info,"[Log] SEND ack = %d , checkSum = %d", m.ack,m.check);
+	sprintf(info,"[Log] SEND ack = %d , checkSum = %d\n", m.ack,m.check);
 	std::string s = info;
 	logger(s);
 
@@ -165,13 +165,13 @@ int _Server::recvfile() { //接收文件的函数
 							}
 						}
 
-					file_accept(recvMsg.seq + 1);  //总是以Seq+len来更新ACK,从而达到类似rdt3.0的确认接收功能
+					file_accept(recvMsg.seq + 1);  //总是以Seq+1来更新ACK
 				}
 
 				
 			}
-			else { 
-				if (recvMsg.if_SYN()) {
+			else { //如果校验和出错，或seq与ack不对应，则返回上一次的ack
+				if (recvMsg.if_SYN()) {   
 					cnt_accept(NowAck);
 				}
 				else {
