@@ -25,6 +25,8 @@ bool lossSet = 0;			//是否设置丢包率
 int lossrate = 0;			//丢包率， 每lossrate个包发生一次丢包		
 int delay = 0;
 
+DWORD sendTime;
+
 static std::string currentPath = "./test/";
 
 std::shared_mutex cache_mutex;    //通过mutex类,防止线程之间冲突
@@ -156,6 +158,9 @@ int _Client::start_client() {
 
 	cnt_setup();  //建立握手
 
+	unsigned long on = 1;  
+	ioctlsocket(Client, FIONBIO, &on);
+
 	//修改缓冲区大小(其实发送端缓冲区不重要, 接收端缓冲区大小才是关键)
 	int buffer_size = wndSize * MSS;
 	setsockopt(Client, SOL_SOCKET, SO_SNDBUF, (const char*)&buffer_size, sizeof(buffer_size));
@@ -168,6 +173,7 @@ int _Client::start_client() {
 	packupFiles(); //包装数据线程,将二进制数据打包放入缓冲区
 
 	sendFiles();  //当窗口有空位时,滑动窗口,将数据从缓冲区移入窗口并发送
+	sendTime = GetTickCount();
 	recvAcks();		//接收线程
 	while (!ifDone) {   //控制线程一同退出
 
@@ -190,8 +196,6 @@ int _Client::resendWnd() {
 	for (int i = 0; i < CurrWnd.size(); i++) {
 		msg message = CurrWnd[i];
 		sendto(Client, (char*)&message, sizeof(msg), 0, (struct sockaddr*)&server_addr, addrlen);
-		std::string s = "[Rsd] Resend Package " + std::to_string(message.seq)+"\n";
-		logger(s);
 	}
 	return 0;
 
@@ -210,6 +214,7 @@ void _Client::recvAcks() {
 					for (int i = baseSeq; i < recvBuff.ack; i++) {    
 						//将已确认的分组弹出窗口(窗口向后滑动)
 						wndPop();
+						sendTime = GetTickCount();
 					}
 					recvLog(recvBuff);
 					if (recvBuff.if_FIN() && recvBuff.if_ACK()) {
@@ -226,9 +231,11 @@ void _Client::recvAcks() {
 			}
 			else {
 				//超时，将窗口内的分组进行重传
-				SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY| FOREGROUND_RED);
-				resendWnd();
-				SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY| FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+				DWORD nowTime = GetTickCount();
+				if (nowTime - sendTime > wait_time) {
+					resendWnd();
+					sendTime = GetTickCount();
+				}
 			}
 		}
 	});
